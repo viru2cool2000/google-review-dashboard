@@ -3,7 +3,7 @@ name: Google Review Dashboard
 on:
   schedule:
     - cron: '0 15 * * *'
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
   reviews:
