@@ -1,10 +1,19 @@
-steps:
-  - uses: actions/checkout@v4
+name: Google Review Dashboard
 
-  - uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+on:
+  workflow_dispatch:
 
-  - run: pip install requests
+jobs:
+  reviews:
+    runs-on: ubuntu-latest
 
-  - run: python tracker.py
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - run: python tracker.py
