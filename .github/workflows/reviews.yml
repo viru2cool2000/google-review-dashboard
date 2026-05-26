@@ -1,13 +1,13 @@
 name: Google Review Dashboard
 
-on:
+ on:
 workflow_dispatch:
 
-jobs:
+ jobs:
 reviews:
 runs-on: ubuntu-latest
 
-steps:
+ steps:
   - uses: actions/checkout@v4
 
   - uses: actions/setup-python@v5
