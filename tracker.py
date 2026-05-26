@@ -146,6 +146,12 @@ except requests.exceptions.RequestException as e:
 with open(COUNT_FILE, "w") as f:
     json.dump({"count": current_reviews}, f)
 
+print("✅ Review count saved")
+
+# ── Save latest count ─────────────────────────────────────────────────────────
+with open(COUNT_FILE, "w") as f:
+    json.dump({"count": current_reviews}, f)
+
 print("✅ Review count saved")except requests.exceptions.RequestException as e:
     print(f"❌ Apify API error: {e}")
     exit(1)
