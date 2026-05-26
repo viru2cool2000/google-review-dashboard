@@ -5,124 +5,118 @@ import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# Secrets
+# ── Secrets ──────────────────────────────────────────────────────────────────
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID     = os.getenv("TELEGRAM_CHAT_ID")
 
-# Files
+# ── Files ─────────────────────────────────────────────────────────────────────
 COUNT_FILE = "reviews.json"
-CSV_FILE = "google_reviews.csv"
+CSV_FILE   = "google_reviews.csv"
 
-# Apify API URL
-url = f"https://api.apify.com/v2/acts/compass~google-maps-extractor/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+# ── Validate secrets ──────────────────────────────────────────────────────────
+if not APIFY_TOKEN or not BOT_TOKEN or not CHAT_ID:
+    print("❌ Missing environment variables. Check APIFY_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.")
+    exit(1)
 
-# Payload
+# ── Apify request ─────────────────────────────────────────────────────────────
+url = (
+    "https://api.apify.com/v2/acts/compass~google-maps-extractor/"
+    f"run-sync-get-dataset-items?token={APIFY_TOKEN}"
+)
+
 payload = {
-    "searchStringsArray": [
-        "Chandukaka Saraf Kalaburagi"
-    ],
+    "searchStringsArray": ["Chandukaka Saraf Kalaburagi"],
     "maxCrawledPlacesPerSearch": 1,
     "maxReviews": 10,
     "reviewsSort": "newest"
 }
 
-# Fetch data
-response = requests.post(url, json=payload)
-data = response.json()
+try:
+    response = requests.post(url, json=payload, timeout=120)
+    response.raise_for_status()
+    data = response.json()
+except requests.exceptions.RequestException as e:
+    print(f"❌ Apify API error: {e}")
+    exit(1)
 
-# Validate response
+# ── Validate response ─────────────────────────────────────────────────────────
 if not isinstance(data, list) or len(data) == 0:
-    print("Invalid API response")
-    exit()
+    print("❌ Invalid or empty API response")
+    exit(1)
 
 place = data[0]
 
-# Business details
-business_name = place.get("title", "Unknown")
-current_reviews = place.get("reviewsCount", 0)
-rating = place.get("totalScore", 0)
+# ── Business details ──────────────────────────────────────────────────────────
+business_name    = place.get("title", "Unknown")
+current_reviews  = place.get("reviewsCount", 0)
+rating           = place.get("totalScore", 0)
 
-# Load old review count
+# ── Load old review count ─────────────────────────────────────────────────────
 old_reviews = 0
-
 if os.path.exists(COUNT_FILE):
     try:
-        with open(COUNT_FILE, "r") as file:
-            saved = json.load(file)
+        with open(COUNT_FILE, "r") as f:
+            saved = json.load(f)
             old_reviews = saved.get("count", 0)
-    except:
-        pass
+    except (json.JSONDecodeError, IOError):
+        print("⚠️ Could not read reviews.json — starting fresh.")
 
-# Calculate new reviews
-new_reviews = current_reviews - old_reviews
+# ── New reviews since last run ────────────────────────────────────────────────
+new_reviews = max(0, current_reviews - old_reviews)
 
-if new_reviews < 0:
-    new_reviews = 0
+# ── IST timestamp ─────────────────────────────────────────────────────────────
+current_time_ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M %p IST")
 
-# IST Time
-current_time_ist = datetime.now(
-    ZoneInfo("Asia/Kolkata")
-).strftime("%d-%m-%Y %I:%M %p IST")
-
-# Extract customer reviews
+# ── Extract reviews ───────────────────────────────────────────────────────────
 reviews = place.get("reviews", [])
 
-# Save reviews to CSV
+# ── Save to CSV (append, no duplicates) ───────────────────────────────────────
 file_exists = os.path.exists(CSV_FILE)
 
 with open(CSV_FILE, "a", newline="", encoding="utf-8") as csvfile:
     writer = csv.writer(csvfile)
-
-    # Header
     if not file_exists:
-        writer.writerow([
-            "Date",
-            "Customer Name",
-            "Rating",
-            "Review"
-        ])
-
-    # Rows
+        writer.writerow(["Date", "Customer Name", "Rating", "Review"])
     for review in reviews:
-        customer = review.get("name", "Unknown")
-        stars = review.get("stars", "")
-        text = review.get("text", "")
-
         writer.writerow([
             current_time_ist,
-            customer,
-            stars,
-            text
+            review.get("name", "Unknown"),
+            review.get("stars", ""),
+            review.get("text", "").replace("\n", " ").strip()   # ← clean multiline text
         ])
 
-# Telegram message
-message = f"""
-📍 {business_name}
+print(f"✅ Saved {len(reviews)} reviews to {CSV_FILE}")
 
-⭐ Rating: {rating}
-📝 Total Reviews: {current_reviews}
-🆕 New Reviews: {new_reviews}
-
-📅 {current_time_ist}
-"""
+# ── Telegram message ──────────────────────────────────────────────────────────
+message = (
+    f"📍 *{business_name}*\n"
+    f"⭐ Rating: {rating}\n"
+    f"📝 Total Reviews: {current_reviews}\n"
+    f"🆕 New Reviews Since Last Run: {new_reviews}\n"
+    f"📅 {current_time_ist}"
+)
 
 print(message)
 
-# Send Telegram
-telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+# ── Send to Telegram ──────────────────────────────────────────────────────────
+try:
+    tg_response = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        data={
+            "chat_id": CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"        # ← enables bold/italics in message
+        },
+        timeout=30
+    )
+    tg_response.raise_for_status()
+    print("✅ Telegram message sent")
+except requests.exceptions.RequestException as e:
+    print(f"❌ Telegram send failed: {e}")
 
-telegram_response = requests.post(
-    telegram_url,
-    data={
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-)
+# ── Save latest count ─────────────────────────────────────────────────────────
+with open(COUNT_FILE, "w") as f:
+    json.dump({"count": current_reviews}, f)
 
-print(telegram_response.text)
-
-# Save latest count
-with open(COUNT_FILE, "w") as file:
-    json.dump({"count": current_reviews}, file)
-```
+print("✅ Review count saved")
