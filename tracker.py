@@ -5,7 +5,7 @@ import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# ── Secrets ──────────────────────────────────────────────────────────────────
+# ── Secrets ───────────────────────────────────────────────────────────────────
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID     = os.getenv("TELEGRAM_CHAT_ID")
@@ -15,7 +15,7 @@ COUNT_FILE = "reviews.json"
 CSV_FILE   = "google_reviews.csv"
 
 # ── Validate secrets ──────────────────────────────────────────────────────────
-if not APIFY_TOKEN or not BOT_TOKEN or not CHAT_ID:
+if not all([APIFY_TOKEN, BOT_TOKEN, CHAT_ID]):
     print("❌ Missing environment variables. Check APIFY_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.")
     exit(1)
 
@@ -48,9 +48,9 @@ if not isinstance(data, list) or len(data) == 0:
 place = data[0]
 
 # ── Business details ──────────────────────────────────────────────────────────
-business_name    = place.get("title", "Unknown")
-current_reviews  = place.get("reviewsCount", 0)
-rating           = place.get("totalScore", 0)
+business_name   = place.get("title", "Unknown")
+current_reviews = place.get("reviewsCount", 0)
+rating          = place.get("totalScore", 0)
 
 # ── Load old review count ─────────────────────────────────────────────────────
 old_reviews = 0
@@ -62,7 +62,6 @@ if os.path.exists(COUNT_FILE):
     except (json.JSONDecodeError, IOError):
         print("⚠️ Could not read reviews.json — starting fresh.")
 
-# ── New reviews since last run ────────────────────────────────────────────────
 new_reviews = max(0, current_reviews - old_reviews)
 
 # ── IST timestamp ─────────────────────────────────────────────────────────────
@@ -71,22 +70,40 @@ current_time_ist = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %I:
 # ── Extract reviews ───────────────────────────────────────────────────────────
 reviews = place.get("reviews", [])
 
-# ── Save to CSV (append, no duplicates) ───────────────────────────────────────
+# ── Load existing Review IDs to avoid duplicates ──────────────────────────────
+existing_ids = set()
+if os.path.exists(CSV_FILE):
+    try:
+        with open(CSV_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                existing_ids.add(row["Review ID"])
+    except (IOError, KeyError):
+        pass
+
+# ── Save to CSV (no duplicates) ───────────────────────────────────────────────
 file_exists = os.path.exists(CSV_FILE)
+new_saved = 0
 
 with open(CSV_FILE, "a", newline="", encoding="utf-8") as csvfile:
     writer = csv.writer(csvfile)
     if not file_exists:
-        writer.writerow(["Date", "Customer Name", "Rating", "Review"])
+        writer.writerow(["Review ID", "Date", "Customer Name", "Rating", "Review"])
     for review in reviews:
+        review_id = review.get("reviewId") or review.get("id", "")
+        if review_id in existing_ids:
+            continue
         writer.writerow([
+            review_id,
             current_time_ist,
             review.get("name", "Unknown"),
             review.get("stars", ""),
-            review.get("text", "").replace("\n", " ").strip()   # ← clean multiline text
+            review.get("text", "").replace("\n", " ").strip()
         ])
+        existing_ids.add(review_id)
+        new_saved += 1
 
-print(f"✅ Saved {len(reviews)} reviews to {CSV_FILE}")
+print(f"✅ {new_saved} new reviews saved to {CSV_FILE}")
 
 # ── Telegram message ──────────────────────────────────────────────────────────
 message = (
@@ -94,29 +111,19 @@ message = (
     f"⭐ Rating: {rating}\n"
     f"📝 Total Reviews: {current_reviews}\n"
     f"🆕 New Reviews Since Last Run: {new_reviews}\n"
+    f"💾 New Rows Added to CSV: {new_saved}\n"
     f"📅 {current_time_ist}"
 )
 
 print(message)
 
-# ── Send to Telegram ──────────────────────────────────────────────────────────
+# ── Send CSV file to Telegram ─────────────────────────────────────────────────
 try:
-    tg_response = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": message,
-            "parse_mode": "Markdown"        # ← enables bold/italics in message
-        },
-        timeout=30
-    )
-    tg_response.raise_for_status()
-    print("✅ Telegram message sent")
-except requests.exceptions.RequestException as e:
-    print(f"❌ Telegram send failed: {e}")
-
-# ── Save latest count ─────────────────────────────────────────────────────────
-with open(COUNT_FILE, "w") as f:
-    json.dump({"count": current_reviews}, f)
-
-print("✅ Review count saved")
+    with open(CSV_FILE, "rb") as f:
+        file_response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+            data={
+                "chat_id": CHAT_ID,
+                "caption": message,
+                "parse_mode": "Markdown"
+            },
